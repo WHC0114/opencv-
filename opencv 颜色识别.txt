@@ -1,3 +1,8 @@
+
+/*该代码再处理录像前先对图像做预处理 我做了直方图均值化和转到HSV色彩空间*/
+
+
+
 #include <opencv2/opencv.hpp>
 
 using namespace std;
@@ -23,7 +28,7 @@ int main()
 	Mat result;
 	result = src.clone();
 
-	//获取灯外围那层明显的黄色
+	//获取灯外围那层明显的黄色 
 	inRange(src, Scalar(90, 200, 220), Scalar(255, 255, 255), dst);
 	namedWindow("inRange", CV_WINDOW_AUTOSIZE);
 	//将特征腐蚀
