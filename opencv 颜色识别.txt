@@ -1,0 +1,255 @@
+#include <opencv2/opencv.hpp>
+
+using namespace std;
+using namespace cv;
+
+int main()
+{
+	Mat src = imread("E:/RM3.pNg");
+	if (!src.data)
+	{
+		printf_s("no input");
+		return -1;
+	}
+	namedWindow("input", CV_WINDOW_AUTOSIZE);
+	imshow("input", src);
+	Mat g_src;
+	Mat last_src;
+	Mat output;
+	last_src = src.clone();
+	g_src = src.clone();
+	output = src.clone();
+	Mat dst;
+	Mat result;
+	result = src.clone();
+
+	//获取灯外围那层明显的黄色
+	inRange(src, Scalar(90, 200, 220), Scalar(255, 255, 255), dst);
+	namedWindow("inRange", CV_WINDOW_AUTOSIZE);
+	//将特征腐蚀
+	Mat kernel = getStructuringElement(MORPH_RECT, Size(5, 5), Point(-1, -1));
+	//morphologyEx(dst, dst, MORPH_OPEN, kernel);
+	//morphologyEx(dst, dst, MORPH_CLOSE, kernel);
+	dilate(dst, dst, kernel);
+	imshow("inRange", dst);
+
+	vector<vector<Point>> contours;
+	vector<Vec4i> hierarchy;
+
+	//找到轮廓并将其画出来
+	findContours(dst, contours, RETR_LIST, CHAIN_APPROX_SIMPLE);
+	drawContours(result, contours, -1, Scalar(255, 0, 0), 0.1, 8);
+
+	namedWindow("result", CV_WINDOW_AUTOSIZE);
+	imshow("result", result);
+
+	//将图片的和灯内像素值接近的点提取
+	vector<Point> points;
+	for (int row = 0; row < g_src.rows; row++)
+	{
+		for (int col = 0; col < g_src.cols; col++)
+		{
+			int b = g_src.at<Vec3b>(row, col)[0];
+			int g = g_src.at<Vec3b>(row, col)[1];
+			int r = g_src.at<Vec3b>(row, col)[2];
+			if (b >= 0 && b <= 255 && g >= 0 && g <= 60 && r > 230)
+			{
+				//printf_s("(%d,%d)\n", row, col);
+				g_src.at<Vec3b>(row, col)[0] = 255;
+				g_src.at<Vec3b>(row, col)[1] = 0;
+				g_src.at<Vec3b>(row, col)[2] = 0;
+				Point p;
+				p.x = col;
+				p.y = row;
+				points.push_back(p);
+			}
+			else
+			{
+				g_src.at<Vec3b>(row, col)[0] = 0;
+				g_src.at<Vec3b>(row, col)[1] = 0;
+				g_src.at<Vec3b>(row, col)[2] = 0;
+			}
+		}
+	}
+
+	imshow("g_src", g_src);
+
+	//判断上述点是否在黄色轮廓内
+	vector<Point> point;
+	for (int i = 0; i < contours.size(); i++)
+	{
+		for (int j = 0; j < points.size(); j++)
+		{
+			if (pointPolygonTest(contours[i], Point2f(points[j].x, points[j].y), false) == 1)
+			{
+				Point s;
+				s.x = points[j].x;
+				s.y = points[j].y;
+				point.push_back(s);
+				//printf_s("（%d,%d）\n",points[j].x,points[j].y);
+			}
+		}
+	}
+
+	//将确切在黄色轮廓内的点在黑色背景的图片上变成蓝色
+	Mat frame;
+	frame = Mat::zeros(g_src.size(), CV_8UC3);
+	frame = Scalar(0, 0, 0);
+	for (int k = 0; k < point.size(); k++)
+	{
+		frame.at<Vec3b>(point[k].y, point[k].x)[0] = 255;
+	}
+	imshow("frame", frame);
+
+
+	//对上述找到的范围进行开操作和闭操作 除去一些比较小的干扰
+	Mat kernel1 = getStructuringElement(MORPH_RECT, Size(3,3), Point(-1, -1));
+	morphologyEx(frame, frame, MORPH_OPEN, kernel1);
+	Mat kernel2 = getStructuringElement(MORPH_RECT, Size(1, 1), Point(-1, -1));
+	//morphologyEx(frame, frame, MORPH_CLOSE, kernel1);
+	dilate(frame, frame, kernel2);
+	imshow("1", frame);
+
+	//对上述图像进行灰度 二值化 寻找发现轮廓
+	Mat last_frame;
+	last_frame = frame.clone();
+	vector<vector<Point>> sss;
+	cvtColor(frame, frame, CV_BGR2GRAY);
+	threshold(frame, frame, 40, 255, THRESH_BINARY | THRESH_OTSU);
+	findContours(frame, sss, RETR_TREE, CHAIN_APPROX_SIMPLE);
+
+
+	//计算轮廓的最小矩形 并画出矩形的中心和四周 
+	vector<RotatedRect> box(sss.size());
+	Point2f rect[4];
+	for (int q = 0; q < sss.size(); q++)
+	{
+		box[q] = minAreaRect(Mat(sss[q]));
+		circle(last_src, Point(box[q].center.x, box[q].center.y), 2, Scalar(255, 0, 0), 2, 8);
+		box[q].points(rect);
+		for (int p = 0; p < 4; p++)
+		{
+			line(last_src, rect[p], rect[(p + 1) % 4], Scalar(0, 255, 0), 0.1, 8);
+		}
+	}
+
+	imshow("last", last_src);
+
+
+	//初始化一些值 
+	Point2f rect1[4];
+	Point2f rect2[4];
+	Mat first_g;
+	first_g = last_src.clone();
+	float min_y = 10000;
+	float min_x = 10000;
+	float max_y = 0;
+	float max_x = 0;
+	double  K;
+	double  K1;
+	double  K2;
+	int K3;
+	int K4;
+	//迭代器 排除一些明显不正确的矩形
+	vector<RotatedRect>::iterator iter = box.begin();
+	vector<RotatedRect> box1;
+	Point2f rect3[4];
+
+	//由于装甲板的灯是竖着的 所以把一些明显横着的矩形排除
+	for (int y = 0; y < box.size(); y++)
+	{
+		if (iter == box.end())
+		{
+			break;
+		}
+		iter[y].points(rect3);
+
+		for (int i = 0; i < 4; i++)
+		{
+
+			min_y = MIN(rect3[i].y, min_y);
+			max_y = MAX(rect3[i].y, max_y);
+			min_x = MIN(rect3[i].x, min_x);
+			max_x = MAX(rect3[i].x, max_x);
+			//printf_s("(%.3f,%.3f)(%.3f,%.3f)\n",min_x,max_x,min_y,max_y);
+		}
+		if (abs(min_x - max_x) < abs(max_y - min_y))
+		{
+			box1.push_back(iter[y]);
+		}
+
+		min_y = 10000;
+		min_x = 10000;
+		max_y = 0;
+		max_x = 0;
+
+
+	}
+
+	int time = 0;
+	//printf_s("%d\n", box1.size());
+
+
+	for (int i = 0; i < box1.size(); i++)
+	{
+		circle(first_g, box1[i].center, 5, Scalar(0, 255, 0), 2);
+	}
+	imshow("heh", first_g);
+	//通过计算 找到装甲板的质心
+	for (int r = 0; r < box1.size(); r++)
+	{
+
+		box1[r%box1.size()].points(rect1);
+		box1[(r + 1) % box1.size()].points(rect2);
+
+		
+		circle(output, rect1[0], 2, Scalar(255, 0, 0), 2);
+		
+
+
+
+
+		if (((box1[(r%box1.size())].center.x - box1[(r + 1) % box1.size()].center.x) != 0 && (rect1[0].x - rect1[1].x) != 0))
+		{
+
+			K = ((box1[r].center.y - box1[(r + 1) % box1.size()].center.y) / (box1[r].center.x - box1[(r + 1) % box1.size()].center.x));
+			K1 = ((rect1[0].y - rect1[1].y) / (rect1[0].x - rect1[1].x));
+			K2 = ((rect2[0].y - rect2[1].y) / (rect2[0].x - rect2[1].x));
+			K3 = cvRound(K * K1);
+			K4 = cvRound(K * K2);
+
+			//printf_s("%.3f , %.3f ,%.3f,%.3f,%.3f\n",K3,K,K1,K2,K4);
+			//printf_s("%d\n", K3);
+
+			if (abs(K2 - K1) < 0.5)
+			{
+				circle(output, Point((box1[r].center.x + box1[(r + 1) % box1.size()].center.x) / 2, (box1[r].center.y + box1[(r + 1) % box1.size()].center.y) / 2), 2, Scalar(255, 255, 255), 2);
+			}
+			if (K3 == -1 && K4 == -1)
+				circle(output, Point((box1[r].center.x + box1[(r + 1) % box1.size()].center.x) / 2, (box1[r].center.y + box1[(r + 1) % box1.size()].center.y) / 2), 2, Scalar(255, 255, 255), 2);
+
+
+		}
+		else
+		{
+			if (((rect1[0].x - rect1[1].x) == 0) && ((rect2[0].x - rect2[1].x) == 0))
+			{
+				circle(output, Point((box1[r].center.x + box1[(r + 1) % box1.size()].center.x) / 2, (box1[r].center.y + box1[(r + 1) % box1.size()].center.y) / 2), 2, Scalar(0, 0, 0), 2);
+				//line(first_g, box[t].center, box[(t + 1) % box.size()].center, Scalar(255, 0, 0), 2, 8);
+				time++;
+				printf_s("%d", time);
+			}
+		}
+	}
+
+
+	namedWindow("first_g", CV_WINDOW_AUTOSIZE);
+	imshow("first_g", output);
+
+
+
+
+	waitKey(0);
+	return 0;
+
+}
