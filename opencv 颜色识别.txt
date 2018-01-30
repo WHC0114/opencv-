@@ -1,16 +1,12 @@
-
-/*该代码再处理录像前先对图像做预处理 我做了直方图均值化和转到HSV色彩空间*/
-
-
-
 #include <opencv2/opencv.hpp>
+#include <math.h>
 
 using namespace std;
 using namespace cv;
 
 int main()
 {
-	Mat src = imread("E:/RM3.pNg");
+	Mat src = imread("E:/RM3.png");
 	if (!src.data)
 	{
 		printf_s("no input");
@@ -18,6 +14,16 @@ int main()
 	}
 	namedWindow("input", CV_WINDOW_AUTOSIZE);
 	imshow("input", src);
+
+	vector<Mat>	img;
+	split(src, img);
+	for (int i = 0; i < 3; i++)
+	{
+		equalizeHist(img[i], img[i]);
+	}
+	merge(img, src);
+
+
 	Mat g_src;
 	Mat last_src;
 	Mat output;
@@ -28,7 +34,7 @@ int main()
 	Mat result;
 	result = src.clone();
 
-	//获取灯外围那层明显的黄色 
+	//获取灯外围那层明显的黄色
 	inRange(src, Scalar(90, 200, 220), Scalar(255, 255, 255), dst);
 	namedWindow("inRange", CV_WINDOW_AUTOSIZE);
 	//将特征腐蚀
@@ -61,8 +67,8 @@ int main()
 			{
 				//printf_s("(%d,%d)\n", row, col);
 				g_src.at<Vec3b>(row, col)[0] = 255;
-				g_src.at<Vec3b>(row, col)[1] = 0;
-				g_src.at<Vec3b>(row, col)[2] = 0;
+				g_src.at<Vec3b>(row, col)[1] = 255;
+				g_src.at<Vec3b>(row, col)[2] = 255;
 				Point p;
 				p.x = col;
 				p.y = row;
@@ -77,184 +83,191 @@ int main()
 		}
 	}
 
-	imshow("g_src", g_src);
 
-	//判断上述点是否在黄色轮廓内
-	vector<Point> point;
+	Mat kernel1 = getStructuringElement(MORPH_RECT,Size(3,3),Point(-1,-1));
+	morphologyEx(g_src, g_src, MORPH_OPEN, kernel1);
+	morphologyEx(g_src, g_src, MORPH_CLOSE, kernel1);
+	imshow("g_src", g_src);
+	cvtColor(g_src, g_src, CV_BGR2GRAY);
+	//threshold(g_src, g_src, 120, 255, THRESH_BINARY|THRESH_OTSU);
+	vector<vector<Point>> next;
+	findContours(g_src, next, RETR_TREE, CHAIN_APPROX_SIMPLE);
+	drawContours(g_src, next,-1,Scalar(255,255,255),0.1);
+
+	namedWindow("findContours",CV_WINDOW_AUTOSIZE);
+	imshow("findContours", g_src);
+
+
+	Mat kk = Mat::zeros(g_src.size(), CV_8UC3);
+	//g_src.convertTo(kk,CV_8UC3);
+	vector<RotatedRect> box(next.size());
+	Point2f rect[4];
+	vector<Point> centers;
+	vector<RotatedRect> new_box;
+	vector<vector<Point>> last_next(next.size());
+ 	for (int i = 0; i < next.size(); i++)
+	{
+		//approxPolyDP(Mat(next[i]), last_next[i], 10, false);
+		box[i] = minAreaRect(Mat(next[i]));
+		circle(kk, box[i].center, 5, Scalar(0, 0, 255), 2);
+		centers.push_back(box[i].center);
+	}
+	namedWindow("circle", CV_WINDOW_AUTOSIZE);
+	imshow("circle", kk);
+
+
+
 	for (int i = 0; i < contours.size(); i++)
 	{
-		for (int j = 0; j < points.size(); j++)
+		for (int j = 0; j < centers.size(); j++)
 		{
-			if (pointPolygonTest(contours[i], Point2f(points[j].x, points[j].y), false) == 1)
+			if (pointPolygonTest(contours[i], box[j].center, false) == 1)
 			{
-				Point s;
-				s.x = points[j].x;
-				s.y = points[j].y;
-				point.push_back(s);
-				//printf_s("（%d,%d）\n",points[j].x,points[j].y);
+				box[j].points(rect);
+				new_box.push_back(box[j]);
+				for (int p = 0; p < 4; p++)
+				{
+					line(kk, rect[p], rect[(p + 1) % 4], Scalar(0, 255, 0), 1);
+				}
 			}
 		}
 	}
-
-	//将确切在黄色轮廓内的点在黑色背景的图片上变成蓝色
-	Mat frame;
-	frame = Mat::zeros(g_src.size(), CV_8UC3);
-	frame = Scalar(0, 0, 0);
-	for (int k = 0; k < point.size(); k++)
-	{
-		frame.at<Vec3b>(point[k].y, point[k].x)[0] = 255;
-	}
-	imshow("frame", frame);
+	imshow("line", kk);
 
 
-	//对上述找到的范围进行开操作和闭操作 除去一些比较小的干扰
-	Mat kernel1 = getStructuringElement(MORPH_RECT, Size(3,3), Point(-1, -1));
-	morphologyEx(frame, frame, MORPH_OPEN, kernel1);
-	Mat kernel2 = getStructuringElement(MORPH_RECT, Size(1, 1), Point(-1, -1));
-	//morphologyEx(frame, frame, MORPH_CLOSE, kernel1);
-	dilate(frame, frame, kernel2);
-	imshow("1", frame);
-
-	//对上述图像进行灰度 二值化 寻找发现轮廓
-	Mat last_frame;
-	last_frame = frame.clone();
-	vector<vector<Point>> sss;
-	cvtColor(frame, frame, CV_BGR2GRAY);
-	threshold(frame, frame, 40, 255, THRESH_BINARY | THRESH_OTSU);
-	findContours(frame, sss, RETR_TREE, CHAIN_APPROX_SIMPLE);
-
-
-	//计算轮廓的最小矩形 并画出矩形的中心和四周 
-	vector<RotatedRect> box(sss.size());
-	Point2f rect[4];
-	for (int q = 0; q < sss.size(); q++)
-	{
-		box[q] = minAreaRect(Mat(sss[q]));
-		circle(last_src, Point(box[q].center.x, box[q].center.y), 2, Scalar(255, 0, 0), 2, 8);
-		box[q].points(rect);
-		for (int p = 0; p < 4; p++)
-		{
-			line(last_src, rect[p], rect[(p + 1) % 4], Scalar(0, 255, 0), 0.1, 8);
-		}
-	}
-
-	imshow("last", last_src);
-
-
-	//初始化一些值 
-	Point2f rect1[4];
 	Point2f rect2[4];
-	Mat first_g;
-	first_g = last_src.clone();
-	float min_y = 10000;
-	float min_x = 10000;
-	float max_y = 0;
-	float max_x = 0;
-	double  K;
-	double  K1;
-	double  K2;
-	int K3;
-	int K4;
-	//迭代器 排除一些明显不正确的矩形
-	vector<RotatedRect>::iterator iter = box.begin();
-	vector<RotatedRect> box1;
-	Point2f rect3[4];
-
-	//由于装甲板的灯是竖着的 所以把一些明显横着的矩形排除
-	for (int y = 0; y < box.size(); y++)
+	float min_x = 0;
+	float min_y = 0;
+	float max_x = 10000;
+	float max_y = 10000;
+	vector<RotatedRect> last_box;
+	for (int i = 0; i < new_box.size(); i++)
 	{
-		if (iter == box.end())
+		new_box[i].points(rect2);
+		for (int j = 0; j < 4; j++) 
 		{
-			break;
+			min_y = MIN(rect2[j].y, min_y);
+			max_y = MAX(rect2[j].y, max_y);
+			min_x = MIN(rect2[j].x, min_x);
+			max_x = MAX(rect2[j].x, max_x);
 		}
-		iter[y].points(rect3);
-
-		for (int i = 0; i < 4; i++)
+		if (abs(min_x - max_x) < abs(max_y - min_y)*0.6)
 		{
-
-			min_y = MIN(rect3[i].y, min_y);
-			max_y = MAX(rect3[i].y, max_y);
-			min_x = MIN(rect3[i].x, min_x);
-			max_x = MAX(rect3[i].x, max_x);
+			last_box.push_back(new_box[i]);
+			//rectangle(kk, Point(min_x, min_y), Point(max_x, max_y), Scalar(0,255,0),2);
 			//printf_s("(%.3f,%.3f)(%.3f,%.3f)\n",min_x,max_x,min_y,max_y);
-		}
-		if (abs(min_x - max_x) < abs(max_y - min_y))
-		{
-			box1.push_back(iter[y]);
 		}
 
 		min_y = 10000;
 		min_x = 10000;
 		max_y = 0;
 		max_x = 0;
-
-
 	}
 
-	int time = 0;
-	//printf_s("%d\n", box1.size());
 
 
-	for (int i = 0; i < box1.size(); i++)
+
+	/*for (int k = 0; k < last_box.size(); k++) 
 	{
-		circle(first_g, box1[i].center, 5, Scalar(0, 255, 0), 2);
-	}
-	imshow("heh", first_g);
-	//通过计算 找到装甲板的质心
-	for (int r = 0; r < box1.size(); r++)
+		printf_s("%.3f,%.3f\n", last_box[k].center.x, last_box[k].center.y);
+	}	*/
+	
+	
+	Point2f rect_last[4];
+	vector<RotatedRect> result_box;
+	bool c = false;
+	for (int i = 0; i < last_box.size(); i++)
 	{
-
-		box1[r%box1.size()].points(rect1);
-		box1[(r + 1) % box1.size()].points(rect2);
-
-		
-		circle(output, rect1[0], 2, Scalar(255, 0, 0), 2);
-		
-
-
-
-
-		if (((box1[(r%box1.size())].center.x - box1[(r + 1) % box1.size()].center.x) != 0 && (rect1[0].x - rect1[1].x) != 0))
+		last_box[i].points(rect_last);
+		for (int j = (last_box.size() - 1); j != i; j--)
 		{
-
-			K = ((box1[r].center.y - box1[(r + 1) % box1.size()].center.y) / (box1[r].center.x - box1[(r + 1) % box1.size()].center.x));
-			K1 = ((rect1[0].y - rect1[1].y) / (rect1[0].x - rect1[1].x));
-			K2 = ((rect2[0].y - rect2[1].y) / (rect2[0].x - rect2[1].x));
-			K3 = cvRound(K * K1);
-			K4 = cvRound(K * K2);
-
-			//printf_s("%.3f , %.3f ,%.3f,%.3f,%.3f\n",K3,K,K1,K2,K4);
-			//printf_s("%d\n", K3);
-
-			if (abs(K2 - K1) < 0.5)
+			if (last_box[i].center == last_box[j].center)
 			{
-				circle(output, Point((box1[r].center.x + box1[(r + 1) % box1.size()].center.x) / 2, (box1[r].center.y + box1[(r + 1) % box1.size()].center.y) / 2), 2, Scalar(255, 255, 255), 2);
+				c=true;
 			}
-			if (K3 == -1 && K4 == -1)
-				circle(output, Point((box1[r].center.x + box1[(r + 1) % box1.size()].center.x) / 2, (box1[r].center.y + box1[(r + 1) % box1.size()].center.y) / 2), 2, Scalar(255, 255, 255), 2);
-
 
 		}
-		else
+		if(c==false)
+			result_box.push_back(last_box[i]);
+		
+		c = false;		
+	}
+	namedWindow("last_box",CV_WINDOW_AUTOSIZE);
+	imshow("last_box",kk);
+
+	double K_center;
+	double K1_angle;
+	double K2_angle;
+	double angle_first;
+	double angle_next;
+	double number_K1;
+	double number_K2;
+	Point2f rect_return_one[4];
+	Point2f rect_return_two[4];
+	int K_angle;
+	int K_sum;
+
+
+	printf_s("%d\n", result_box.size());
+
+
+	for (int i = 0; i < result_box.size(); i++)
+	{
+		result_box[i].points(rect_return_one);
+		result_box[(i + 1) % result_box.size()].points(rect_return_two);
+		//printf_s("%.3f\n", result_box[i].angle);
+		for (int j = (result_box.size() - 1); j != i; j--)
 		{
-			if (((rect1[0].x - rect1[1].x) == 0) && ((rect2[0].x - rect2[1].x) == 0))
-			{
-				circle(output, Point((box1[r].center.x + box1[(r + 1) % box1.size()].center.x) / 2, (box1[r].center.y + box1[(r + 1) % box1.size()].center.y) / 2), 2, Scalar(0, 0, 0), 2);
-				//line(first_g, box[t].center, box[(t + 1) % box.size()].center, Scalar(255, 0, 0), 2, 8);
-				time++;
-				printf_s("%d", time);
-			}
+				angle_first = result_box[i].angle;
+				angle_next = (double)result_box[j].angle;
+				K_center = (result_box[i].center.y - result_box[j].center.y) / (result_box[i].center.x - result_box[j].center.x);
+			
+				
+				
+				printf_s("%.3f, %.3f\n", angle_first, angle_next);
+				
+				if (angle_first == 0 || angle_next == 0)
+				{			
+					if (abs(K_center) < 0.5&&abs(angle_first - angle_next) < 0.5)
+					{
+						line(kk, result_box[i].center, result_box[j].center, Scalar(0, 0, 255), 2);
+						circle(kk, Point((result_box[i].center.x + result_box[j].center.x) / 2, (result_box[i].center.y + result_box[j].center.y) / 2), 5, Scalar(255, 255, 255), 3);
+					}
+					continue;
+				
+				}
+				number_K1 = tan(angle_first);
+				number_K2 = tan(angle_next);
+				
+					//printf_s("%.3f\n", K_center);
+
+
+				//printf_s("%d , %d\n", i, j);
+				line(kk, result_box[i].center, result_box[j].center, Scalar(255, 0, 0), 2);
+
+				K_angle = cvRound(result_box[i].angle - result_box[j].angle);
+				K_sum = cvRound(abs(result_box[i].angle) + abs(result_box[j].angle));
+				K1_angle = number_K1*K_center;
+				K2_angle = number_K2*K_center;
+
+					//printf_s("%.3f\n", K_center);
+					printf_s("垂直：%.3f,%.3f,两角差距：%d 两角和：%d\n", K1_angle, K2_angle, K_angle, K_sum);
+
+				if (abs(K_angle) <= 4 && abs(K1_angle) <= 1 && abs(K2_angle) <= 1)
+				{
+					circle(kk, Point((result_box[i].center.x + result_box[j].center.x) / 2, (result_box[i].center.y + result_box[j].center.y) / 2), 5, Scalar(255, 255, 255), 3);
+				}
 		}
+		
 	}
 
+	namedWindow("目标点",CV_WINDOW_AUTOSIZE);
+	imshow("目标点",kk);
 
-	namedWindow("first_g", CV_WINDOW_AUTOSIZE);
-	imshow("first_g", output);
-
-
+	//double tg = tan(-90);
 
 
 	waitKey(0);
 	return 0;
-
 }
+
